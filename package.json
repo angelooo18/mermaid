@@ -1,0 +1,34 @@
+{
+  "name": "pi-mermaid-tools",
+  "version": "0.1.0",
+  "description": "Mermaid diagrams for pi: write → exact-edit → render to PNG inline, look at it, iterate, publish to viz/. Includes a mermaid-maker agent definition and a skill.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "mermaid",
+    "diagram",
+    "visualization"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/mermaid-tools/index.ts"
+    ],
+    "skills": [
+      "./skills/mermaid"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^12.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs"
+  }
+}
