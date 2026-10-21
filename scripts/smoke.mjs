@@ -1,88 +1,81 @@
 #!/usr/bin/env node
 /**
- * Smoke test for the mermaid tools. Runs the three tools directly (no model in
- * the loop) in a throwaway cwd, and checks that source writing, exact-match
- * editing, preview rendering, publishing, and the error paths all behave.
+ * Smoke test for the mermaid extension. Calls the tool directly — no model in
+ * the loop — in a throwaway cwd, and checks every output format plus the error
+ * paths.
  *
  *   npm run smoke
- *
- * Exits non-zero on the first failed check.
  */
 
-import { mkdtempSync, readdirSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 const workdir = mkdtempSync(join(tmpdir(), "mermaid-smoke-"))
 process.chdir(workdir)
 
-const { default: extension } = await import("../extensions/mermaid-tools/tools/mermaid_tools.ts")
+const { default: extension } = await import("../index.ts")
 
 const tools = {}
-extension({ registerTool: (t) => (tools[t.name] = t), on: () => {} })
+extension({ registerTool: (tool) => (tools[tool.name] = tool), on: () => {} })
 
 let failures = 0
 function check(label, ok, extra = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${extra ? ` — ${extra}` : ""}`)
   if (!ok) failures++
 }
-
-for (const name of ["write_mermaid", "edit_mermaid", "render_mermaid"]) {
-  check(`registered ${name}`, typeof tools[name]?.execute === "function")
+const saved = () => {
+  try {
+    return readdirSync(join(workdir, "viz"))
+  } catch {
+    return []
+  }
 }
+const images = (result) => result.content.filter((part) => part.type === "image")
 
 const source = ["graph TD", "  A[axiom] --> B[derived fact]", "  A --> C[lemma]", "  B --> D[theorem]", "  C --> D", ""].join("\n")
 
-const write = await tools.write_mermaid.execute("1", { source })
-check("write_mermaid reports lines", write.details?.lines === 5, String(write.details?.lines))
+check("registers render_mermaid", typeof tools.render_mermaid?.execute === "function")
 
-const edit = await tools.edit_mermaid.execute("2", { old_text: "B[derived fact]", new_text: "B[derived]" })
-check("edit_mermaid applies", edit.content[0].text.includes("B[derived]"))
+const preview = await tools.render_mermaid.execute("1", { source })
+check("png preview returns an image", images(preview).length === 1)
+check("png preview is image/png", images(preview)[0]?.mimeType === "image/png")
+check("preview writes nothing to the project", saved().length === 0)
+check("preview reports no save", /preview only/.test(preview.content[0].text))
 
-try {
-  await tools.edit_mermaid.execute("3", { old_text: "not-in-source", new_text: "x" })
-  check("edit_mermaid rejects a miss", false)
-} catch (error) {
-  check("edit_mermaid rejects a miss", /not found/.test(error.message))
-}
+const png = await tools.render_mermaid.execute("2", { source, save_as: "Dependency Graph" })
+check("png save_as writes a .png", saved().filter((f) => /^mermaid-dependency-graph-\d+\.png$/.test(f)).length === 1)
 
-try {
-  await tools.edit_mermaid.execute("4", { old_text: "-->", new_text: "==>" })
-  check("edit_mermaid rejects an ambiguous match", false)
-} catch (error) {
-  check("edit_mermaid rejects an ambiguous match", /appears \d+ times/.test(error.message))
-}
+const svg = await tools.render_mermaid.execute("3", { source, format: "svg", save_as: "vector" })
+check("svg save_as writes a .svg", saved().some((f) => /^mermaid-vector-\d+\.svg$/.test(f)))
+check("svg returns a raster preview", images(svg)[0]?.mimeType === "image/png")
+const svgFile = saved().find((f) => /^mermaid-vector-\d+\.svg$/.test(f))
+check("svg file is real SVG markup", readFileSync(join(workdir, "viz", svgFile), "utf8").trimStart().startsWith("<svg"))
 
-const preview = await tools.render_mermaid.execute("5", {})
-check("render_mermaid returns an image", preview.content.some((c) => c.type === "image"))
-check("render_mermaid preview does not publish", readdirSafe("viz").length === 0)
+const jpg = await tools.render_mermaid.execute("4", { source, format: "jpg", save_as: "photo", background: "transparent" })
+check("jpg save_as writes a .jpg", saved().some((f) => /^mermaid-photo-\d+\.jpg$/.test(f)))
+check("jpg returns image/jpeg", images(jpg)[0]?.mimeType === "image/jpeg")
+const jpgFile = saved().find((f) => /^mermaid-photo-\d+\.jpg$/.test(f))
+const jpgBytes = readFileSync(join(workdir, "viz", jpgFile))
+check("jpg is real JPEG data", jpgBytes[0] === 0xff && jpgBytes[1] === 0xd8 && jpgBytes[2] === 0xff)
 
-const published = await tools.render_mermaid.execute("6", { save_as: "Dependency Graph!", theme: "neutral" })
-const files = readdirSafe("viz")
-check("render_mermaid publishes into viz/", files.length === 1, files[0])
-check("published filename is slugified", /^viz-dependency-graph-\d+\.png$/.test(files[0] ?? ""))
-check("publish returns filename+path", Boolean(published.details?.filename && published.details?.path))
+writeFileSync(join(workdir, "local.mmd"), source)
+const fromFile = await tools.render_mermaid.execute("5", { file: "local.mmd" })
+check("renders from a .mmd file", images(fromFile).length === 1)
 
-const svg = await tools.render_mermaid.execute("7", { save_as: "vector", format: "svg" })
-check("svg publishes a .svg file", readdirSafe("viz").some((f) => /^viz-vector-\d+\.svg$/.test(f)))
-check("svg still returns a raster preview", svg.content.some((c) => c.type === "image" && c.mimeType === "image/png"))
+const invalid = await tools.render_mermaid.execute("6", { source: "graph TD\n  A -->" })
+check("bad syntax reports an error, not an image", invalid.isError === true && images(invalid).length === 0)
 
-const jpg = await tools.render_mermaid.execute("8", { save_as: "photo", format: "jpg" })
-check("jpg publishes a .jpg file", readdirSafe("viz").some((f) => /^viz-photo-\d+\.jpg$/.test(f)))
-check("jpg returns image/jpeg", jpg.content.some((c) => c.type === "image" && c.mimeType === "image/jpeg"))
-
-try {
-  await tools.render_mermaid.execute("9", { format: "gif" })
-  check("render_mermaid rejects an unknown format", false)
-} catch (error) {
-  check("render_mermaid rejects an unknown format", /unknown format/.test(error.message))
-}
-
-function readdirSafe(dir) {
+for (const [label, params] of [
+  ["unknown format", { source, format: "gif" }],
+  ["missing source", {}],
+  ["missing file", { file: "nope.mmd" }],
+]) {
   try {
-    return readdirSync(join(workdir, dir))
-  } catch {
-    return []
+    await tools.render_mermaid.execute("7", params)
+    check(`rejects ${label}`, false)
+  } catch (error) {
+    check(`rejects ${label}`, /format|source|no such file/.test(error.message), error.message.slice(0, 60))
   }
 }
 

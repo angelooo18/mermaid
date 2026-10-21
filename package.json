@@ -1,7 +1,7 @@
 {
   "name": "pi-mermaid-tools",
-  "version": "0.2.0",
-  "description": "Mermaid diagrams for pi: write \u2192 exact-edit \u2192 render to PNG/SVG/JPG, look at the result, iterate, publish to viz/. Includes a mermaid-maker agent definition and a skill.",
+  "version": "1.0.0",
+  "description": "Mermaid diagrams on demand for pi: one render_mermaid tool producing PNG, SVG, or JPG, returned inline.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -12,10 +12,7 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/mermaid-tools/index.ts"
-    ],
-    "skills": [
-      "./skills/mermaid"
+      "./index.ts"
     ]
   },
   "peerDependencies": {
@@ -24,6 +21,7 @@
   },
   "dependencies": {
     "@mermaid-js/mermaid-cli": "^12.0.0",
+    "puppeteer": "^24.0.0",
     "sharp": "^0.34.0"
   },
   "engines": {

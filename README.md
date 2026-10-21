@@ -1,104 +1,67 @@
-# mermaid-tools
+# mermaid
 
-Mermaid diagrams as a **verify-by-looking** loop for [pi](https://pi.dev): write the source, render it to a PNG that comes back *inline* so the model can see it, fix what's wrong, then publish.
-
-Extracted from [amosblomqvist/learn](https://github.com/amosblomqvist/learn) (`extensions/visual-tools` → mermaid half) and adapted to work standalone, on Linux, and without the `interactive-subagents` extension.
-
-## What you get
-
-| Piece | Path | What it is |
-|---|---|---|
-| Extension | `extensions/mermaid-tools/index.ts` | Registers the three tools in your current session — no subagent machinery required |
-| Tools | `extensions/mermaid-tools/tools/mermaid_tools.ts` | `write_mermaid`, `edit_mermaid`, `render_mermaid` |
-| Skill | `skills/mermaid/SKILL.md` | When to draw, how to brief yourself, the render-and-inspect loop |
-| Agent (optional) | `agents/mermaid-maker.md` | A `mermaid-maker` subagent for setups that support it |
-| Smoke test | `scripts/smoke.mjs` | `npm run smoke` — exercises all three tools and every output format with no model in the loop |
-
-## The loop
+A [pi](https://pi.dev) extension that draws diagrams. One tool, no subagents, no session state:
 
 ```
-write_mermaid({ source })            → source lands in a managed per-session file
-render_mermaid({})                   → picture returned inline (preview, nothing saved)
-edit_mermaid({ old_text, new_text }) → exact-match fix; fails on 0 or >1 matches
-render_mermaid({ save_as: "topic" }) → publishes viz/viz-topic-<timestamp>.png
+render_mermaid({ source, format?, save_as? })  →  image inline
 ```
 
-### Formats
-
-`render_mermaid` takes `format: "png" | "svg" | "jpg"` (default `png`):
-
-| format | file | notes |
-|---|---|---|
-| `png` | `viz-<slug>-<ts>.png` | 2× scale, any background including `transparent` |
-| `svg` | `viz-<slug>-<ts>.svg` | vector, editable, sharp at any zoom; the tool still returns a rasterized PNG preview inline so the model can verify it |
-| `jpg` | `viz-<slug>-<ts>.jpg` | transcoded from the PNG at quality 92 via [sharp](https://sharp.pixelplumbing.com); no alpha — `transparent` is flattened onto white |
-
-Only svg/png are native `mmdc` outputs; jpg is a sharp transcode, which is why no ImageMagick/rsvg-convert is needed.
-
-The point of the inline image is that **rendering success ≠ correct**. Syntax can parse while an arrow points backwards. The model is expected to look at the returned PNG, catch that, and iterate — the skill and agent definition both enforce it.
-
-`render_mermaid` also takes `theme` (`default|neutral|dark|forest|base`) and `background` (`white` by default, or `transparent`).
+Ask for a diagram, get a picture back in the conversation. If you want it kept, it saves to `viz/`.
 
 ## Install
 
-Requires Node ≥ 20, and pi.
-
 ```bash
-# from GitHub
 pi install git:github.com/angelooo18/mermaid
+```
 
-# or try it for one run, without installing
+Or try it for a single run:
+
+```bash
 pi -e git:github.com/angelooo18/mermaid
-
-# or from a local clone
-git clone https://github.com/angelooo18/mermaid ~/mermaid
-pi install ~/mermaid
 ```
 
-Then in any session: *"draw the dependency graph as a mermaid diagram"* — or invoke the skill directly with `/skill:mermaid`.
+Then just ask: *"draw the auth flow as a mermaid diagram"*.
 
-### The optional agent
+## The tool
 
-If you use a subagent extension that reads agent definitions from `.pi/agents/` (e.g. `pi-interactive-subagents`), copy it in:
+| Parameter | Default | Meaning |
+|---|---|---|
+| `source` | — | Full Mermaid text, starting with the diagram type (`graph TD`, `sequenceDiagram`, `erDiagram`, …) |
+| `file` | — | Path to a `.mmd` file to render instead of `source` — cheaper when iterating: edit the file, call again |
+| `format` | `png` | `png`, `svg`, or `jpg` |
+| `theme` | mermaid's default | `default`, `neutral`, `dark`, `forest`, `base` |
+| `background` | `white` | Any CSS color; `transparent` works for png/svg (jpg has no alpha) |
+| `scale` | `2` | Pixel density for png/jpg, 1–4 |
+| `save_as` | — | Kebab-case slug → saves `viz/mermaid-<slug>-<timestamp>.<format>` |
 
-```bash
-cp ~/mermaid/agents/mermaid-maker.md <your-project>/.pi/agents/
-```
+Without `save_as` it's a preview: nothing touches your project. Every render returns the image inline, so the model can see what it drew — SVG and JPG included (SVG comes back as a browser-rendered PNG preview).
 
-`tools:`, `auto-exit:`, and `system-prompt:` in that file are specific to `pi-interactive-subagents`; adapt them for other implementations. If it's present, the extension also teaches `interactive-subagents` about the three tool names so spawned makers get them.
+### Formats
 
-## Chrome / Chromium
+| format | produced by | notes |
+|---|---|---|
+| `png` | mermaid-cli | 2× scale by default; raster for chat/screenshots |
+| `svg` | mermaid-cli | true vector output, sharp at any zoom — best for docs, slides, READMEs |
+| `jpg` | PNG → [sharp](https://sharp.pixelplumbing.com) | smaller, quality 92, flattened onto `background` |
 
-Rendering goes through `@mermaid-js/mermaid-cli` (`mmdc`), which drives a real browser. Discovery order:
+## Requirements
 
-1. `PI_MERMAID_CHROME`, `CHROME_PATH`, or `PUPPETEER_EXECUTABLE_PATH`
-2. A system install (`google-chrome`, `chromium`, `chromium-browser`, `brave-browser`, `microsoft-edge`, or the macOS app bundles)
-3. Puppeteer's managed browser (`~/.cache/puppeteer/chrome/...`)
-
-If nothing is found, `mmdc` falls back to whatever puppeteer resolves itself. To get a managed browser without installing system packages:
-
-```bash
-cd ~/mermaid && npx puppeteer browsers install chrome
-```
-
-## Configuration
+- Node ≥ 20
+- A browser for mermaid-cli. It needs none installed: `puppeteer` is a dependency and downloads its own Chrome on install. To use a system browser instead, set `PI_MERMAID_CHROME=/usr/bin/chromium` (also honours `CHROME_PATH` / `PUPPETEER_EXECUTABLE_PATH`).
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `PI_MERMAID_DIR` | `viz` | Where published files go, relative to the project root |
-| `PI_MERMAID_CHROME` | — | Explicit browser binary to use for rendering |
+| `PI_MERMAID_DIR` | `viz` | Where saved diagrams go, relative to the project root |
+| `PI_MERMAID_CHROME` | auto | Browser binary to drive |
 
-Transient renders live in `$TMPDIR/pi-mermaid-tools/mermaid-<pid>/`, so the only thing that ever appears in your project is a published PNG. The source file is pid-scoped per pi process (parallel makers don't collide) and is picked up again after `/reload`.
-
-## Verify the install
+## Verify it
 
 ```bash
-npm install
-npm run smoke
+npm install && npm run smoke
 ```
 
-Seventeen checks: tools registered, source written, edits applied, ambiguous edits rejected, preview rendered, nothing published on preview, publish slugified and returned, svg/jpg/png outputs produced with correct extensions, unknown formats rejected. Output goes to a throwaway temp dir.
+17 checks, no model involved: every format writes a real PNG/SVG/JPEG, previews stay out of the project, bad syntax reports an error instead of a diagram, bad arguments are rejected.
 
 ## Credit
 
-Design, tool contracts, and the render-and-inspect philosophy come from [amosblomqvist/learn](https://github.com/amosblomqvist/learn) — a personal learning system shared as-is. This repo is the mermaid half, decoupled from the Obsidian/vault workflow and ported to Linux with standalone registration.
+Originally extracted from [amosblomqvist/learn](https://github.com/amosblomqvist/learn)'s `visual-tools` extension, then reduced to its essentials. The earlier three-tool version (managed source file, `write`/`edit`/`render`, subagent support) is preserved at tag [`v0.2.0-loop`](https://github.com/angelooo18/mermaid/tree/v0.2.0-loop).
