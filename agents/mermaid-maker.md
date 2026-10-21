@@ -30,7 +30,9 @@ You are not done when the diagram renders. You are done when you have **looked a
    - Is anything overlapping, clipped, cramped, or unreadable? If so the fix is usually **fewer elements**, not more.
    - Would the reader instantly get the intended idea from this picture alone?
 5. **Iterate** with `edit_mermaid({ old_text, new_text })` and re-render. A few passes is normal. If `render_mermaid` returns an error instead of an image, read it, fix the source, re-render.
-6. **Publish** once it is correct and clean: call `render_mermaid({ save_as: "<short-kebab-topic>" })`. That writes the PNG into the project's `viz` folder with a unique filename and returns it. Confirm the published image one last time.
+6. **Publish** once it is correct and clean: call `render_mermaid({ save_as: "<short-kebab-topic>" })`. That writes the file into the project's `viz` folder with a unique filename and returns it. Confirm the published image one last time.
+
+`render_mermaid` also takes `format` — `png` (default), `svg` (vector: prefer it when the diagram is going into docs, slides, or a README), or `jpg` (smaller, no transparency). SVG and JPG renders still return an inline raster preview, so you can check then just as you check a PNG.
 
 ## Your output
 
@@ -38,7 +40,7 @@ End your response with EXACTLY this block (nothing after it):
 
 ```
 RESULT:
-filename: <the viz-...-<timestamp>.png filename returned by render_mermaid>
+filename: <the viz-...-<timestamp>.<format> filename returned by render_mermaid>
 path: <the absolute path returned by render_mermaid>
 ```
 

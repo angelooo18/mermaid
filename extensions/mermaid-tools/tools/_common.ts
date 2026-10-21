@@ -278,13 +278,13 @@ function slugify(slug: string): string {
   )
 }
 
-/** Copy a rendered PNG into <cwd>/<publishDir> with a unique, slugified name. */
-export function publish(pngPath: string, slug: string): { filename: string; path: string } {
+/** Copy a rendered file into <cwd>/<publishDir> with a unique, slugified name. */
+export function publish(renderPath: string, slug: string, ext = "png"): { filename: string; path: string } {
   const filesDir = join(process.cwd(), publishDirName())
   mkdirSync(filesDir, { recursive: true })
-  const filename = `viz-${slugify(slug)}-${Date.now()}.png`
+  const filename = `viz-${slugify(slug)}-${Date.now()}.${ext.replace(/^\./, "")}`
   const dest = join(filesDir, filename)
-  copyFileSync(pngPath, dest)
+  copyFileSync(renderPath, dest)
   return { filename, path: dest }
 }
 

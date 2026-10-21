@@ -11,7 +11,7 @@ Three tools, one managed source file per session. You never name the file.
 |---|---|
 | `write_mermaid({ source })` | Replaces the whole source (first draft, or a full rewrite) |
 | `edit_mermaid({ old_text, new_text })` | One exact-match replacement; fails loudly on 0 or >1 matches |
-| `render_mermaid({ save_as?, theme?, background? })` | Renders the source to PNG, returns it **inline**; with `save_as`, also publishes to `<cwd>/viz` |
+| `render_mermaid({ save_as?, format?, theme?, background? })` | Renders the source, returns the picture **inline**; with `save_as`, also publishes to `<cwd>/viz` |
 
 ## The loop that matters
 
@@ -26,6 +26,16 @@ Three tools, one managed source file per session. You never name the file.
 4. **Look at the returned image.** Rendering success only proves the syntax parsed; it says nothing about whether the picture is *true* or readable. Check: every arrow direction, every label, no overlap or clipping, nothing cramped.
 5. **`edit_mermaid`** and re-render. A few passes is normal. When the fix is "too much happening", the fix is fewer elements, not smaller text.
 6. **Publish** once it is correct and clean: `render_mermaid({ save_as: "short-kebab-topic" })` → writes `viz/viz-<slug>-<timestamp>.png`.
+
+## Formats
+
+| `format` | File | Use for |
+|---|---|---|
+| `png` (default) | `viz-<slug>-<ts>.png` | Screenshots, Obsidian/Notion embeds, anywhere a raster is fine |
+| `svg` | `viz-<slug>-<ts>.svg` | Docs, slides, READMEs — vector stays sharp at any zoom, editable in Figma/Inkscape, themeable via CSS |
+| `jpg` | `viz-<slug>-<ts>.jpg` | Smaller files for slide decks and chat; **no transparency** (image is flattened onto `background`) |
+
+`svg` and `jpg` renders still come back as an inline PNG/JPEG **preview**, so the look-then-fix loop works the same for every format. Omitting `format` keeps `png`, so existing calls don't change.
 
 ## Rules
 

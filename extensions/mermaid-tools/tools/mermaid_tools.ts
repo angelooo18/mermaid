@@ -43,7 +43,11 @@ const RENDER_TIMEOUT_MS = 120_000
 
 const THEMES = ["default", "neutral", "dark", "forest", "base"] as const
 
-type RenderDetails = { ok: boolean; path: string; filename?: string }
+/** Output formats. `svg` is vector; `jpg` is produced by transcoding a PNG. */
+const FORMATS = ["png", "svg", "jpg"] as const
+type Format = (typeof FORMATS)[number]
+
+type RenderDetails = { ok: boolean; path: string; filename?: string; format?: Format }
 
 let session: Session | null = null
 
@@ -129,20 +133,28 @@ export default function mermaidToolsExtension(pi: ExtensionAPI) {
     name: "render_mermaid",
     label: "Render Mermaid",
     description:
-      "Render the CURRENT session Mermaid source to a PNG and return it inline so you can SEE the " +
+      "Render the CURRENT session Mermaid source and return the picture inline so you can SEE the " +
       "diagram and iterate. You do NOT pass the source here — it comes from the managed file; call " +
       "write_mermaid first.\n\n" +
+      "`format`: `png` (default, raster), `svg` (vector — crisp at any size, editable, embeds in " +
+      "docs/slides), or `jpg` (compressed raster for photos/slides; no transparency). SVG and JPG " +
+      "renders still come back as an inline PNG/JPEG preview so you can check them.\n\n" +
       "Iterate freely with no `save_as` (preview only). When the diagram is correct and clean, call " +
-      "once more with `save_as` set to a short kebab-case topic slug: that publishes the PNG into " +
+      "once more with `save_as` set to a short kebab-case topic slug: that publishes the file into " +
       "<cwd>/viz with a unique filename and returns the filename to embed. On a render error this " +
       "returns the error text instead of an image — fix with edit_mermaid and re-render.",
     parameters: Type.Object({
       save_as: Type.Optional(
         Type.String({
           description:
-            "Short kebab-case topic slug (e.g. 'internet-packets'). When set, the rendered PNG is " +
-            "published to <cwd>/viz as viz-<slug>-<timestamp>.png and the filename is returned. " +
+            "Short kebab-case topic slug (e.g. 'internet-packets'). When set, the rendered file is " +
+            "published to <cwd>/viz as viz-<slug>-<timestamp>.<format> and the filename is returned. " +
             "Omit for a preview-only render.",
+        }),
+      ),
+      format: Type.Optional(
+        Type.String({
+          description: `Output format: ${FORMATS.join(" | ")}. Default \`png\`. \`svg\` is vector (best for docs and slides); \`jpg\` is a compressed raster with no transparency.`,
         }),
       ),
       theme: Type.Optional(
@@ -151,7 +163,9 @@ export default function mermaidToolsExtension(pi: ExtensionAPI) {
         }),
       ),
       background: Type.Optional(
-        Type.String({ description: "PNG background color, e.g. 'white' (default), 'transparent', '#f5f5f5'." }),
+        Type.String({
+          description: "Background color, e.g. 'white' (default), 'transparent', '#f5f5f5'. JPG has no alpha — transparent is flattened onto white.",
+        }),
       ),
     }),
     async execute(_id, params) {
@@ -163,6 +177,13 @@ export default function mermaidToolsExtension(pi: ExtensionAPI) {
           `render_mermaid: mermaid-cli (mmdc) not found. Run \`npm install\` in ${PACKAGE_ROOT} (it installs @mermaid-js/mermaid-cli).`,
         )
       }
+
+      const requested = String(params.format ?? "png").toLowerCase().replace(/^jpeg$/, "jpg")
+      if (!FORMATS.includes(requested as Format)) {
+        throw new Error(`render_mermaid: unknown format \`${params.format}\` — use one of ${FORMATS.join(", ")}.`)
+      }
+      const format = requested as Format
+      const background = String(params.background ?? "white")
 
       const chrome = findChrome()
       const cfgPath = join(workDir, "puppeteer.json")
@@ -178,9 +199,12 @@ export default function mermaidToolsExtension(pi: ExtensionAPI) {
         "utf8",
       )
 
-      const outPath = join(workDir, `render-${Date.now()}.png`)
-      const args = ["-i", bodyPath, "-o", outPath, "-p", cfgPath, "-s", "2"]
-      args.push("-b", String(params.background ?? "white"))
+      // mmdc emits svg/png/pdf directly. JPEG is a conversion: render PNG, then
+      // transcode with sharp (bundled) so no ImageMagick is needed.
+      const stamp = Date.now()
+      const primaryPath = join(workDir, `render-${stamp}.${format === "jpg" ? "png" : format}`)
+      const args = ["-i", bodyPath, "-o", primaryPath, "-p", cfgPath, "-s", "2"]
+      args.push("-b", format === "jpg" && background === "transparent" ? "white" : background)
       if (params.theme) args.push("-t", String(params.theme))
 
       const res = await run(MMDC_BIN, args, {
@@ -189,39 +213,73 @@ export default function mermaidToolsExtension(pi: ExtensionAPI) {
         env: chrome ? { PUPPETEER_SKIP_DOWNLOAD: "1" } : {},
       })
 
-      if (res.code !== 0 || !existsSync(outPath)) {
+      const fail = (detail: string, note = "") => ({
+        content: [
+          {
+            type: "text" as const,
+            text: `${note}Mermaid render FAILED — no image produced. Fix the source with edit_mermaid and call render_mermaid again.\n\nError:\n${detail}`,
+          },
+        ],
+        details: { ok: false, path: "" } as RenderDetails,
+      })
+
+      if (res.code !== 0 || !existsSync(primaryPath)) {
         const detail = (res.stderr || res.stdout || "unknown error").split("\n").slice(-30).join("\n")
-        const note = res.timedOut ? "mmdc timed out.\n\n" : ""
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${note}Mermaid render FAILED — no image produced. Fix the source with edit_mermaid and call render_mermaid again.\n\nError:\n${detail}`,
-            },
-          ],
-          details: { ok: false, path: "" } as RenderDetails,
-        }
+        return fail(detail, res.timedOut ? "mmdc timed out.\n\n" : "")
       }
 
-      const data = readFileSync(outPath).toString("base64")
+      // Resolve (file to publish, inline preview bytes, preview mime type).
+      let outputPath = primaryPath
+      let preview: Buffer
+      let previewMime: string
+
+      try {
+        if (format === "jpg") {
+          outputPath = join(workDir, `render-${stamp}.jpg`)
+          const sharp = (await import("sharp")).default
+          await sharp(primaryPath)
+            .flatten({ background: background === "transparent" ? "white" : background })
+            .jpeg({ quality: 92 })
+            .toFile(outputPath)
+          preview = readFileSync(outputPath)
+          previewMime = "image/jpeg"
+        } else if (format === "svg") {
+          // Rasterize a preview so the model can actually LOOK at the vector output.
+          const sharp = (await import("sharp")).default
+          preview = await sharp(primaryPath, { density: 160 }).png().toBuffer()
+          previewMime = "image/png"
+        } else {
+          preview = readFileSync(primaryPath)
+          previewMime = "image/png"
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return fail(`converting ${format} failed: ${message}`)
+      }
+
+      const data = preview.toString("base64")
       const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = []
+      const formatNote =
+        format === "svg"
+          ? " The file itself is SVG (vector); the image below is a PNG preview of it."
+          : ""
 
       if (params.save_as) {
-        const { filename, path } = publish(outPath, String(params.save_as))
+        const { filename, path } = publish(outputPath, String(params.save_as), format)
         content.push({
           type: "text",
-          text: `Published.\nfilename: ${filename}\npath: ${path}\n\nLOOK at the diagram below to confirm it is correct before returning it.`,
+          text: `Published.\nfilename: ${filename}\npath: ${path}\nformat: ${format}${formatNote}\n\nLOOK at the diagram below to confirm it is correct before returning it.`,
         })
-        content.push({ type: "image", data, mimeType: "image/png" })
-        return { content, details: { ok: true, path, filename } as RenderDetails }
+        content.push({ type: "image", data, mimeType: previewMime })
+        return { content, details: { ok: true, path, filename, format } as RenderDetails }
       }
 
       content.push({
         type: "text",
-        text: "Preview render (not saved). LOOK: are arrows/relationships correct, labels right, nothing cramped? Fix with edit_mermaid, or re-render with `save_as` to publish.",
+        text: `Preview render (not saved, ${format}).${formatNote} LOOK: are arrows/relationships correct, labels right, nothing cramped? Fix with edit_mermaid, or re-render with \`save_as\` to publish.`,
       })
-      content.push({ type: "image", data, mimeType: "image/png" })
-      return { content, details: { ok: true, path: outPath } as RenderDetails }
+      content.push({ type: "image", data, mimeType: previewMime })
+      return { content, details: { ok: true, path: outputPath, format } as RenderDetails }
     },
   })
 }

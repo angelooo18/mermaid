@@ -63,6 +63,21 @@ check("render_mermaid publishes into viz/", files.length === 1, files[0])
 check("published filename is slugified", /^viz-dependency-graph-\d+\.png$/.test(files[0] ?? ""))
 check("publish returns filename+path", Boolean(published.details?.filename && published.details?.path))
 
+const svg = await tools.render_mermaid.execute("7", { save_as: "vector", format: "svg" })
+check("svg publishes a .svg file", readdirSafe("viz").some((f) => /^viz-vector-\d+\.svg$/.test(f)))
+check("svg still returns a raster preview", svg.content.some((c) => c.type === "image" && c.mimeType === "image/png"))
+
+const jpg = await tools.render_mermaid.execute("8", { save_as: "photo", format: "jpg" })
+check("jpg publishes a .jpg file", readdirSafe("viz").some((f) => /^viz-photo-\d+\.jpg$/.test(f)))
+check("jpg returns image/jpeg", jpg.content.some((c) => c.type === "image" && c.mimeType === "image/jpeg"))
+
+try {
+  await tools.render_mermaid.execute("9", { format: "gif" })
+  check("render_mermaid rejects an unknown format", false)
+} catch (error) {
+  check("render_mermaid rejects an unknown format", /unknown format/.test(error.message))
+}
+
 function readdirSafe(dir) {
   try {
     return readdirSync(join(workdir, dir))
